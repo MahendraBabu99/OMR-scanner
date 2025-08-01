@@ -1,14 +1,9 @@
 import cv2
 import numpy as np
 
-def sort_contours_by_columns(cnts, rows=4, col_tolerance=30):
-    """
-    Group contours column-wise, then sort top to bottom in each column.
-    """
-    # Sort contours by horizontal position (left to right)
+def group_questions_column_wise_row_bubbles(cnts, questions_per_col=10, options_per_question=4, col_tolerance=50, row_tolerance=30):
+    # Sort left to right (x-axis) for columns
     cnts = sorted(cnts, key=lambda c: cv2.boundingRect(c)[0])
-    
-    # Group into columns based on horizontal proximity
     columns = []
     current_col = []
     last_x = None
@@ -18,83 +13,80 @@ def sort_contours_by_columns(cnts, rows=4, col_tolerance=30):
         if last_x is None or abs(x - last_x) < col_tolerance:
             current_col.append(c)
         else:
-            # Sort current column top to bottom before adding
-            current_col = sorted(current_col, key=lambda c: cv2.boundingRect(c)[1])
             columns.append(current_col)
             current_col = [c]
         last_x = x
-    
-    # Add the last column
     if current_col:
-        current_col = sorted(current_col, key=lambda c: cv2.boundingRect(c)[1])
         columns.append(current_col)
 
-    # Organize into questions (groups of 4 rows per column)
-    sorted_questions = []
+    all_questions = []
     for col in columns:
-        for i in range(0, len(col), rows):
-            group = col[i:i + rows]
-            if len(group) == rows:
-                sorted_questions.append(group)
-    
-    return sorted_questions
+        # sort top to bottom within column
+        col = sorted(col, key=lambda c: cv2.boundingRect(c)[1])
+        for i in range(0, len(col), options_per_question):
+            group = col[i:i + options_per_question]
+            if len(group) == options_per_question:
+                # sort options left to right (row-wise within question)
+                group = sorted(group, key=lambda c: cv2.boundingRect(c)[0])
+                all_questions.append(group)
 
-# --- Main processing ---
-image = cv2.imread(r"C:\Users\chapa mahindra\Downloads\omr.jpg")
-resized = cv2.resize(image, (700, 700))
+    return all_questions
 
-rois = cv2.selectROIs("Select ROIs", resized, showCrosshair=True)
+# --- Main Program ---
+image = cv2.imread(r"C:\Users\chapa mahindra\Downloads\maheomr.jpg")
+resized_image = cv2.resize(image, (700, 700))
+
+rois = cv2.selectROIs("Select ROIs", resized_image, showCrosshair=True)
 cv2.destroyAllWindows()
 
 if len(rois) == 0:
-    print(" No ROI selected.")
+    print("No ROI selected.")
     exit()
 
-print(f" Selected ROIs: {rois}")
-
+print(f"Selected ROIs: {rois}")
 question_counter = 1
 
 for roi_idx, (x, y, w, h) in enumerate(rois):
-    roi = resized[y:y + h, x:x + w]
+    roi = resized_image[y:y + h, x:x + w]
     roi = cv2.resize(roi, (800, 800))
+
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    thresh = cv2.adaptiveThreshold(blurred, 255, 
-                                 cv2.ADAPTIVE_THRESH_MEAN_C,
-                                 cv2.THRESH_BINARY_INV, 11, 2)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    thresh = cv2.adaptiveThreshold(blur, 255,
+                                   cv2.ADAPTIVE_THRESH_MEAN_C,
+                                   cv2.THRESH_BINARY_INV, 11, 3)
 
+    # Morphology to clean noise
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    morph = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
 
+    # Detect contours
     contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    bubble_contours = []
 
+    bubble_contours = []
     for c in contours:
         x_, y_, w_, h_ = cv2.boundingRect(c)
         area = cv2.contourArea(c)
         ar = w_ / float(h_)
-
-        if 15 < w_ < 60 and 15 < h_ < 60 and 0.6 < ar < 1.4 and area > 80:
+        if 15 < w_ < 60 and 15 < h_ < 60 and 0.7 < ar < 1.3 and area > 100:
             bubble_contours.append(c)
 
-    print(f"\n ROI {roi_idx + 1}: Found {len(bubble_contours)} bubble candidates")
+    print(f"\nROI {roi_idx + 1}: Found {len(bubble_contours)} bubble candidates")
 
     if len(bubble_contours) < 4:
-        print(" Not enough bubbles found.")
+        print("Not enough bubbles found.")
         continue
 
-    # Sort into columns and groups of 4 (A-D options per question)
-    questions = sort_contours_by_columns(bubble_contours, rows=4)
+    # Group and sort
+    questions = group_questions_column_wise_row_bubbles(bubble_contours)
 
-    print(f" ROI {roi_idx + 1}: {len(questions)} questions found (column-wise)")
+    print(f"ROI {roi_idx + 1}: {len(questions)} questions found (column-wise, row-bubbles)")
 
     for q_bubbles in questions:
         if len(q_bubbles) != 4:
-            continue  # Skip incomplete groups
+            continue
 
-        # Bubbles are already sorted top to bottom in column
         print(f"\n  Question {question_counter}:")
-
         filled_pixels = []
         for i, bubble in enumerate(q_bubbles):
             mask = np.zeros(thresh.shape, dtype="uint8")
@@ -107,19 +99,19 @@ for roi_idx, (x, y, w, h) in enumerate(rois):
 
         for i, val in enumerate(filled_pixels):
             most_filled = val == max_val and (max_val - second_max) > (0.15 * max_val)
-            mark = "" if most_filled else ""
+            mark = "<-- selected" if most_filled else ""
             print(f"    Option {chr(65 + i)}: {val} {mark}")
 
         question_counter += 1
 
-    # Visualization
+    # Debug view
     debug_img = roi.copy()
     for i, c in enumerate(bubble_contours):
         x, y, w, h = cv2.boundingRect(c)
-        cv2.rectangle(debug_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        cv2.putText(debug_img, str(i+1), (x, y-5), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-    
-    cv2.imshow(f"ROI {roi_idx+1} Bubbles", debug_img)
+        cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(debug_img, str(i + 1), (x, y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+    cv2.imshow(f"ROI {roi_idx + 1} Bubbles", debug_img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
