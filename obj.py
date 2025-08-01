@@ -1,6 +1,11 @@
 import cv2
 import numpy as np
 
+import random
+
+# Generate a random answer key of size 100 with options A, B, C, D
+random_answer_key = [random.choice(['A', 'B', 'C', 'D']) for _ in range(100)]
+
 def group_questions_column_wise_row_bubbles(cnts, questions_per_col=10, options_per_question=4, col_tolerance=50, row_tolerance=30):
     # Sort left to right (x-axis) for columns
     cnts = sorted(cnts, key=lambda c: cv2.boundingRect(c)[0])
@@ -33,11 +38,12 @@ def group_questions_column_wise_row_bubbles(cnts, questions_per_col=10, options_
     return all_questions
 
 # --- Main Program ---
-image = cv2.imread(r"C:\Users\chapa mahindra\Downloads\maheomr.jpg")
+image = cv2.imread(r"C:\Users\chapa mahindra\OneDrive\Pictures\Screenshots\finalomr.jpg")
 resized_image = cv2.resize(image, (700, 700))
 
 rois = cv2.selectROIs("Select ROIs", resized_image, showCrosshair=True)
 cv2.destroyAllWindows()
+
 
 if len(rois) == 0:
     print("No ROI selected.")
@@ -46,9 +52,12 @@ if len(rois) == 0:
 print(f"Selected ROIs: {rois}")
 question_counter = 1
 
+# Store extracted answers
+extracted_answers = []
+
 for roi_idx, (x, y, w, h) in enumerate(rois):
     roi = resized_image[y:y + h, x:x + w]
-    roi = cv2.resize(roi, (800, 800))
+    roi = cv2.resize(roi, (1000, 1000))
 
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -104,6 +113,17 @@ for roi_idx, (x, y, w, h) in enumerate(rois):
 
         question_counter += 1
 
+        # Print the answer with the highest pixel value
+        max_index = filled_pixels.index(max_val)
+        print(f"    Answer: Option {chr(65 + max_index)} (pixels: {max_val})\n")
+
+        # Store the extracted answer
+        extracted_answers.append(chr(65 + max_index))
+
+        # Print the option with the highest pixel value
+        max_index = filled_pixels.index(max_val)
+        print(f"    Answer: Option {chr(65 + max_index)} (pixels: {max_val})\n")
+
     # Debug view
     debug_img = roi.copy()
     for i, c in enumerate(bubble_contours):
@@ -115,3 +135,11 @@ for roi_idx, (x, y, w, h) in enumerate(rois):
     cv2.imshow(f"ROI {roi_idx + 1} Bubbles", debug_img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+# --- Score Calculation ---
+score = 0
+num_questions = min(len(random_answer_key), len(extracted_answers))
+for i in range(num_questions):
+    if extracted_answers[i] == random_answer_key[i]:
+        score += 1
+print(f"\nFinal Score: {score} out of {num_questions}")
