@@ -3,10 +3,12 @@ import numpy as np
 
 import random
 
-# Generate a random answer key of size 100 with options A, B, C, D
-random_answer_key = [random.choice(['A', 'B', 'C', 'D']) for _ in range(100)]
+# Generate a random answer key of size 160 with options A, B, C, D
+random_answer_key = [random.choice(['A', 'B', 'C', 'D']) for _ in range(160)]
 
-def group_questions_column_wise_row_bubbles(cnts, questions_per_col=10, options_per_question=4, col_tolerance=50, row_tolerance=30):
+
+# For 160 questions, 5 columns, 32 questions per column
+def group_questions_column_wise_row_bubbles(cnts, questions_per_col=32, options_per_question=4, col_tolerance=50, row_tolerance=30):
     # Sort left to right (x-axis) for columns
     cnts = sorted(cnts, key=lambda c: cv2.boundingRect(c)[0])
     columns = []
@@ -38,7 +40,7 @@ def group_questions_column_wise_row_bubbles(cnts, questions_per_col=10, options_
     return all_questions
 
 # --- Main Program ---
-image = cv2.imread(r"C:\Users\chapa mahindra\OneDrive\Pictures\Screenshots\finalomr.jpg")
+image = cv2.imread(r"C:\Users\chapa mahindra\OneDrive\Pictures\finalomr1.jpg")
 resized_image = cv2.resize(image, (700, 700))
 
 rois = cv2.selectROIs("Select ROIs", resized_image, showCrosshair=True)
@@ -58,7 +60,11 @@ extracted_answers = []
 for roi_idx, (x, y, w, h) in enumerate(rois):
     roi = resized_image[y:y + h, x:x + w]
     roi = cv2.resize(roi, (1000, 1000))
+    # Get the image dimensions
+    # height, width = image.shape[:2]
 
+    # # Resize ROI to match image size
+    # roi_resized = cv2.resize(roi, (width, height))
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     thresh = cv2.adaptiveThreshold(blur, 255,
