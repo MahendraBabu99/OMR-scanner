@@ -1,6 +1,6 @@
+
 import cv2
 import numpy as np
-
 import random
 
 # Generate a random answer key of size 160 with options A, B, C, D
@@ -39,108 +39,150 @@ def group_questions_column_wise_row_bubbles(cnts, questions_per_col=32, options_
 
     return all_questions
 
+
 # --- Main Program ---
-image = cv2.imread(r"C:\Users\chapa mahindra\OneDrive\Pictures\finalomr1.jpg")
-resized_image = cv2.resize(image, (700, 700))
-
-rois = cv2.selectROIs("Select ROIs", resized_image, showCrosshair=True)
-cv2.destroyAllWindows()
-
-
-if len(rois) == 0:
-    print("No ROI selected.")
+image = cv2.imread(r"C:\Users\chapa mahindra\Documents\varshitha.jpg")
+if image is None:
+    print("Image not found.")
     exit()
 
-print(f"Selected ROIs: {rois}")
-question_counter = 1
+# Resize for easier processing (optional, depends on image size)
+resized_image = cv2.resize(image, (1200, 1700))
+gray = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
+blur = cv2.GaussianBlur(gray, (5, 5), 0)
+thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 10)
 
-# Store extracted answers
+
+# Debug: Show thresholded image before contour detection
+cv2.imshow("Thresholded Image", thresh)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
+
+# Find the largest contour (should be the OMR sheet border)
+contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+# Always use the largest contour for the OMR sheet border
+for idx, c in enumerate(contours):
+    area = cv2.contourArea(c)
+    x, y, w, h = cv2.boundingRect(c)
+    print(f"Contour {idx}: area={area}, bbox=({x},{y},{w},{h})")
+
+# Use the largest contour (contours[0])
+sheet_contour = contours[0]
+peri = cv2.arcLength(sheet_contour, True)
+approx = cv2.approxPolyDP(sheet_contour, 0.02 * peri, True)
+if len(approx) != 4:
+    print(f"Warning: Largest contour does not have 4 corners (has {len(approx)}). Approximating to 4 points.")
+    # Use minAreaRect to get 4 corners
+    rect = cv2.minAreaRect(sheet_contour)
+    box = cv2.boxPoints(rect)
+    sheet_cnt = box.astype(int)
+else:
+    sheet_cnt = approx
+
+
+# Perspective transform to get a top-down view
+def order_points(pts):
+    pts = pts.reshape(4, 2)
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+rect = order_points(sheet_cnt)
+(tl, tr, br, bl) = rect
+widthA = np.linalg.norm(br - bl)
+widthB = np.linalg.norm(tr - tl)
+heightA = np.linalg.norm(tr - br)
+heightB = np.linalg.norm(tl - bl)
+maxWidth = max(int(widthA), int(widthB))
+maxHeight = max(int(heightA), int(heightB))
+dst = np.array([
+    [0, 0],
+    [maxWidth - 1, 0],
+    [maxWidth - 1, maxHeight - 1],
+    [0, maxHeight - 1]
+], dtype="float32")
+M = cv2.getPerspectiveTransform(rect, dst)
+warped = cv2.warpPerspective(resized_image, M, (maxWidth, maxHeight))
+
+# Debug: Show warped image and print its shape
+print(f"Warped image shape: {warped.shape}")
+cv2.imshow("Warped OMR Sheet", warped)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
+
+# Crop the answer area (manually tune these values for your image)
+answer_area = warped[80:1620, 60:1140]  # adjust as needed for your image
+if answer_area.size == 0:
+    print("Error: Cropped answer_area is empty. Please adjust the crop coordinates.")
+    exit()
+answer_area_gray = cv2.cvtColor(answer_area, cv2.COLOR_BGR2GRAY)
+answer_area_blur = cv2.GaussianBlur(answer_area_gray, (5, 5), 0)
+answer_area_thresh = cv2.adaptiveThreshold(answer_area_blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 10)
+
+# Find all bubbles
+contours, _ = cv2.findContours(answer_area_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+bubble_contours = []
+for c in contours:
+    x, y, w, h = cv2.boundingRect(c)
+    area = cv2.contourArea(c)
+    ar = w / float(h)
+    if 18 < w < 40 and 18 < h < 40 and 0.7 < ar < 1.3 and area > 200:
+        bubble_contours.append(c)
+
+print(f"Found {len(bubble_contours)} bubble candidates")
+
+# Group and sort bubbles into questions (5 columns, 32 rows, 4 options each)
+def sort_bubbles(bubble_contours):
+    # Sort by x (columns)
+    bubble_contours = sorted(bubble_contours, key=lambda c: cv2.boundingRect(c)[0])
+    columns = [[] for _ in range(5)]
+    col_width = (answer_area.shape[1] - 60) // 5
+    for c in bubble_contours:
+        x, y, w, h = cv2.boundingRect(c)
+        col_idx = min(4, max(0, (x - 20) // col_width))
+        columns[col_idx].append(c)
+    # Sort each column by y (top to bottom)
+    for i in range(5):
+        columns[i] = sorted(columns[i], key=lambda c: cv2.boundingRect(c)[1])
+    return columns
+
+columns = sort_bubbles(bubble_contours)
+
 extracted_answers = []
-
-for roi_idx, (x, y, w, h) in enumerate(rois):
-    roi = resized_image[y:y + h, x:x + w]
-    roi = cv2.resize(roi, (1000, 1000))
-    # Get the image dimensions
-    # height, width = image.shape[:2]
-
-    # # Resize ROI to match image size
-    # roi_resized = cv2.resize(roi, (width, height))
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    thresh = cv2.adaptiveThreshold(blur, 255,
-                                   cv2.ADAPTIVE_THRESH_MEAN_C,
-                                   cv2.THRESH_BINARY_INV, 11, 3)
-
-    # Morphology to clean noise
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    # Detect contours
-    contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    bubble_contours = []
-    for c in contours:
-        x_, y_, w_, h_ = cv2.boundingRect(c)
-        area = cv2.contourArea(c)
-        ar = w_ / float(h_)
-        if 15 < w_ < 60 and 15 < h_ < 60 and 0.7 < ar < 1.3 and area > 100:
-            bubble_contours.append(c)
-
-    print(f"\nROI {roi_idx + 1}: Found {len(bubble_contours)} bubble candidates")
-
-    if len(bubble_contours) < 4:
-        print("Not enough bubbles found.")
-        continue
-
-    # Group and sort
-    questions = group_questions_column_wise_row_bubbles(bubble_contours)
-
-    print(f"ROI {roi_idx + 1}: {len(questions)} questions found (column-wise, row-bubbles)")
-
-    for q_bubbles in questions:
+for col_idx, col in enumerate(columns):
+    for row in range(32):
+        q_bubbles = col[row*4:(row+1)*4]
         if len(q_bubbles) != 4:
+            extracted_answers.append('-')
             continue
-
-        print(f"\n  Question {question_counter}:")
         filled_pixels = []
         for i, bubble in enumerate(q_bubbles):
-            mask = np.zeros(thresh.shape, dtype="uint8")
+            mask = np.zeros(answer_area_thresh.shape, dtype="uint8")
             cv2.drawContours(mask, [bubble], -1, 255, -1)
-            filled = cv2.countNonZero(cv2.bitwise_and(thresh, thresh, mask=mask))
+            filled = cv2.countNonZero(cv2.bitwise_and(answer_area_thresh, answer_area_thresh, mask=mask))
             filled_pixels.append(filled)
-
         max_val = max(filled_pixels)
         second_max = sorted(filled_pixels, reverse=True)[1] if len(filled_pixels) > 1 else 0
+        if max_val < 200:  # not filled
+            extracted_answers.append('-')
+            continue
+        most_filled = [(val == max_val and (max_val - second_max) > (0.15 * max_val)) for val in filled_pixels]
+        if sum(most_filled) == 1:
+            max_index = filled_pixels.index(max_val)
+            extracted_answers.append(chr(65 + max_index))
+        else:
+            extracted_answers.append('-')
 
-        for i, val in enumerate(filled_pixels):
-            most_filled = val == max_val and (max_val - second_max) > (0.15 * max_val)
-            mark = "<-- selected" if most_filled else ""
-            print(f"    Option {chr(65 + i)}: {val} {mark}")
-
-        question_counter += 1
-
-        # Print the answer with the highest pixel value
-        max_index = filled_pixels.index(max_val)
-        print(f"    Answer: Option {chr(65 + max_index)} (pixels: {max_val})\n")
-
-        # Store the extracted answer
-        extracted_answers.append(chr(65 + max_index))
-
-        # Print the option with the highest pixel value
-        max_index = filled_pixels.index(max_val)
-        print(f"    Answer: Option {chr(65 + max_index)} (pixels: {max_val})\n")
-
-    # Debug view
-    debug_img = roi.copy()
-    for i, c in enumerate(bubble_contours):
-        x, y, w, h = cv2.boundingRect(c)
-        cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.putText(debug_img, str(i + 1), (x, y - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-
-    cv2.imshow(f"ROI {roi_idx + 1} Bubbles", debug_img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+print("\nExtracted Answers:")
+for i, ans in enumerate(extracted_answers, 1):
+    print(f"Q{i}: {ans}")
 
 # --- Score Calculation ---
 score = 0
